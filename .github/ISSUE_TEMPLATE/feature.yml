@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a provider or behavior improvement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Privacy, duplicate-injection, and write-safety considerations
+    validations:
+      required: true

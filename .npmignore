@@ -1,0 +1,10 @@
+.github/
+docs/
+test/
+scripts/
+CHANGELOG.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SUPPORT.md
+THREAT-MODEL.md
+*.tgz

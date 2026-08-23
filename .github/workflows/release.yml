@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  NPM_CONFIG_PROVENANCE: "true"
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - name: Verify successful run is current protected main
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$RUN_SHA" = "$main_sha" || { echo "Skipping stale CI run"; exit 1; }
+          printf 'sha=%s\n' "$RUN_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.ref.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install --global npm@11.6.0
+      - run: npm ci
+      - run: npm run check
+
+      - name: Determine whether this version needs release
+        id: version
+        run: |
+          set -euo pipefail
+          package="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          actual="$(npm view "${package}@${version}" version --json 2>/dev/null | tr -d '"' || true)"
+          printf 'package=%s\nversion=%s\ntag=v%s\n' "$package" "$version" "$version" >> "$GITHUB_OUTPUT"
+          if [ "$actual" = "$version" ]; then printf 'publish=false\n' >> "$GITHUB_OUTPUT"; else printf 'publish=true\n' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Verify release metadata
+        if: steps.version.outputs.publish == 'true'
+        run: node scripts/verify-release.mjs "${{ steps.version.outputs.tag }}"
+
+      - name: Pack exact release asset
+        if: steps.version.outputs.publish == 'true'
+        id: pack
+        run: |
+          set -euo pipefail
+          npm pack --json > pack-result.json
+          tarball="$(node -e "const p=require('./pack-result.json'); process.stdout.write(p[0].filename)")"
+          shasum -a 256 "$tarball" > SHA256SUMS.txt
+          mkdir -p package-smoke && cd package-smoke
+          npm init -y >/dev/null
+          npm install --ignore-scripts "../$tarball"
+          ./node_modules/.bin/personal-assistant doctor
+          cd ..
+          printf 'tarball=%s\n' "$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable workflow artifact
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-package-${{ steps.version.outputs.tag }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish exact package with npm trusted publishing
+        if: steps.version.outputs.publish == 'true'
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance
+
+      - name: Attest package
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Create tag and GitHub Release with package assets
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.ref.outputs.sha }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$SHA"
+          gh release create "$TAG" "$TARBALL" SHA256SUMS.txt --generate-notes --target "$SHA" --title "$TAG" --latest --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify registry publication
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            actual="$(npm view "${{ steps.version.outputs.package }}@${{ steps.version.outputs.version }}" version --json 2>/dev/null | tr -d '"' || true)"
+            test "$actual" = "${{ steps.version.outputs.version }}" && exit 0
+            sleep 10
+          done
+          exit 1
