@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = path.join(root, 'runtime', 'personal-assistant-hook.mjs');
 const cli = path.join(root, 'bin', 'personal-assistant.mjs');
+const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 
 function run(file, args, { env = {}, input = '' } = {}) {
   return spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', input, env: { ...process.env, ...env } });
@@ -57,7 +58,7 @@ test('installer is explicit, idempotent, host-correct, and preserves foreign hoo
   assert.equal(claude.hooks.SessionStart.length, 1);
   assert.equal(codex.hooks.SessionStart.length, 1);
   assert.match(codex.hooks.SessionStart[0].matcher, /startup/);
-  assert.ok(fs.existsSync(path.join(home, '.local', 'share', 'euraika-personal-assistant', 'runtime', '0.1.0', 'prompt.xml')));
+  assert.ok(fs.existsSync(path.join(home, '.local', 'share', 'euraika-personal-assistant', 'runtime', packageVersion, 'prompt.xml')));
 
   const uninstall = run(cli, ['uninstall', '--host', 'both', '--scope', 'user', '--yes'], { env });
   assert.equal(uninstall.status, 0, uninstall.stderr);
