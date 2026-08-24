@@ -1,6 +1,6 @@
 {
   "name": "@euraika-labs/personal-assistant",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "A safety-reviewed personal-assistant Agent Skill and opt-in hooks for Claude Code and Codex",
   "type": "module",
   "bin": {
@@ -11,10 +11,14 @@
     "bin/",
     "runtime/",
     "skill/",
+    "evals/",
     "README.md",
     "PRIVACY.md",
     "SECURITY.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/",
+    "CHANGELOG.md",
+    "THREAT-MODEL.md"
   ],
   "scripts": {
     "test": "node --test",
