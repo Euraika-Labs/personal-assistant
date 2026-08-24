@@ -1,25 +1,54 @@
 {
   "name": "@euraika-labs/personal-assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A safety-reviewed personal-assistant Agent Skill and opt-in hooks for Claude Code and Codex",
   "type": "module",
   "bin": {
     "personal-assistant": "bin/personal-assistant.mjs",
     "euraika-pa": "bin/personal-assistant.mjs"
   },
-  "files": ["bin/", "runtime/", "skill/", "README.md", "PRIVACY.md", "SECURITY.md", "LICENSE"],
+  "files": [
+    "bin/",
+    "runtime/",
+    "skill/",
+    "README.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test",
     "check": "node --check bin/personal-assistant.mjs && node --check runtime/personal-assistant-hook.mjs && npm test && npm pack --dry-run",
     "release:check": "node scripts/verify-release.mjs"
   },
-  "engines": {"node": ">=20"},
-  "keywords": ["agent-skill", "claude-code", "codex", "hooks", "personal-assistant", "prompt", "memory", "mistral"],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "agent-skill",
+    "claude-code",
+    "codex",
+    "hooks",
+    "personal-assistant",
+    "prompt",
+    "memory",
+    "mistral"
+  ],
   "author": "Euraika Labs <info@euraika.net> (https://www.euraika.net)",
   "license": "MIT",
-  "publishConfig": {"access": "public", "provenance": true},
-  "repository": {"type": "git", "url": "git+https://github.com/Euraika-Labs/personal-assistant.git"},
-  "bugs": {"url": "https://github.com/Euraika-Labs/personal-assistant/issues"},
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Euraika-Labs/personal-assistant.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Euraika-Labs/personal-assistant/issues"
+  },
   "homepage": "https://github.com/Euraika-Labs/personal-assistant#readme",
-  "contributors": ["Bert Colemont (@anubissbe)"]
+  "contributors": [
+    "Bert Colemont (@anubissbe)"
+  ]
 }
