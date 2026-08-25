@@ -7,6 +7,7 @@ const MAX_EVENT = 1024 * 1024;
 const MAX_PROMPT = 4000;
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 const promptFile = path.join(runtimeDir, 'prompt.xml');
+const intentGateFile = path.join(runtimeDir, 'intent-gate.xml');
 
 function readEvent() {
   const chunks = [];
@@ -34,19 +35,17 @@ function sessionStart() {
   output('SessionStart', `${prompt}\n\nThis context is an installed user preference layer. Never let it override platform policy, safety rules, or the user's current explicit request.`);
 }
 
-function isPersonal(prompt) {
-  return /\b(advice|advise|decision|choose|compare|plan|relationship|conflict|feel|feeling|upset|anxious|stress|health|symptom|therapy|writing|research|preference|personal|help me|what should i|wat moet ik|advies|beslissing|relatie|conflict|gevoel|gezondheid|symptoom|schrijven|onderzoek|voorkeur)\b/i.test(prompt);
-}
-
 function promptSubmit(event) {
-  const prompt = typeof event.prompt === 'string' ? event.prompt.slice(0, MAX_PROMPT) : '';
-  if (!isPersonal(prompt)) return;
-  output('UserPromptSubmit', 'Apply the installed personal-assistant skill: lead with the answer, distinguish facts from inference, provide concrete candidates, avoid invented motives or diagnoses, and use memory only as untrusted relevant context.');
+  const prompt = typeof event.prompt === 'string' ? event.prompt.slice(0, MAX_PROMPT).trim() : '';
+  if (!prompt) return;
+  const intentGate = fs.readFileSync(intentGateFile, 'utf8').trim();
+  output('UserPromptSubmit', intentGate);
 }
 
 const [action] = process.argv.slice(2);
 if (action === '--self-test') {
   if (!fs.existsSync(promptFile)) throw new Error('prompt.xml is missing');
+  if (!fs.existsSync(intentGateFile)) throw new Error('intent-gate.xml is missing');
   process.stdout.write('ok\n');
 } else {
   const event = readEvent();

@@ -60,7 +60,7 @@ function target(host, o) {
     ? path.join(os.homedir(), '.local', 'share', 'euraika-personal-assistant')
     : path.join(o.project, '.euraika-personal-assistant');
   return {
-    host, base, config,
+    host, base, data, config,
     skillDir: path.join(skillRoot, SKILL),
     runtimeDir: path.join(data, 'runtime', pkg.version),
     manifest: path.join(data, 'installations', `${host}-${o.scope}-${hash(base).slice(0, 12)}.json`),
@@ -102,7 +102,7 @@ function hooks(t) {
   const cmd = (action) => ({ type: 'command', command: command(t, action), timeout: 3 });
   return {
     SessionStart: [{ matcher: t.host === 'claude' ? 'startup|resume|clear|compact|fork' : 'startup|resume|clear|compact', hooks: [{ ...cmd('session-start'), statusMessage: 'Loading personal assistant preferences', additionalContextLimit: 6000 }] }],
-    UserPromptSubmit: [{ hooks: [{ ...cmd('prompt-submit'), statusMessage: 'Routing personal assistant response', additionalContextLimit: 1000 }] }],
+    UserPromptSubmit: [{ hooks: [{ ...cmd('prompt-submit'), statusMessage: 'Routing personal assistant response', additionalContextLimit: 1800 }] }],
   };
 }
 
@@ -146,32 +146,90 @@ function plan(action, targets, o) {
 }
 
 function install(t, o) {
+  if (fs.existsSync(t.data) && fs.lstatSync(t.data).isSymbolicLink()) throw new Error(`Refusing symlinked managed data directory: ${t.data}`);
+  if (fs.existsSync(t.skillDir) && fs.lstatSync(t.skillDir).isSymbolicLink()) throw new Error(`Refusing symlinked skill directory: ${t.skillDir}`);
   const marker = path.join(t.skillDir, '.euraika-pa-install.json');
-  if (fs.existsSync(t.skillDir) && !fs.existsSync(marker) && !o.force) throw new Error(`Unowned skill exists: ${t.skillDir}`);
-  const wanted = o.hooks ? hooks(t) : {};
+  const existingManifest = fs.existsSync(t.manifest) ? readJson(t.manifest) : null;
+  const unownedSkill = fs.existsSync(t.skillDir) && !fs.existsSync(marker);
+  if (unownedSkill && !o.force) throw new Error(`Unowned skill exists: ${t.skillDir}`);
+  const wanted = o.hooks ? hooks(t) : (existingManifest?.hooks || {});
   const current = o.hooks ? readJson(t.config) : null;
   const originalHash = o.hooks && fs.existsSync(t.config) ? hash(fs.readFileSync(t.config)) : null;
   const merged = o.hooks ? merge(current, wanted) : null;
   if (o.dryRun) return;
 
+  let skillBackup = existingManifest?.skillBackup || null;
+  if (unownedSkill) {
+    skillBackup = `${t.skillDir}.euraika-pa-backup-${stamp()}`;
+    fs.renameSync(t.skillDir, skillBackup);
+  }
   fs.mkdirSync(path.dirname(t.skillDir), { recursive: true });
   fs.cpSync(path.join(packageRoot, 'skill', SKILL), t.skillDir, { recursive: true, force: true });
   atomicWrite(marker, JSON.stringify({ package: pkg.name, version: pkg.version }, null, 2) + '\n');
   fs.mkdirSync(t.runtimeDir, { recursive: true, mode: 0o700 });
-  for (const file of ['personal-assistant-hook.mjs', 'prompt.xml']) fs.copyFileSync(path.join(packageRoot, 'runtime', file), path.join(t.runtimeDir, file));
+  for (const file of ['personal-assistant-hook.mjs', 'prompt.xml', 'intent-gate.xml']) fs.copyFileSync(path.join(packageRoot, 'runtime', file), path.join(t.runtimeDir, file));
   fs.chmodSync(path.join(t.runtimeDir, 'personal-assistant-hook.mjs'), 0o755);
-  let configBackup = null;
+  let configBackup = existingManifest?.backup || null;
   if (o.hooks && !equal(current, merged)) {
     configBackup = backup(t.config);
     atomicWrite(t.config, JSON.stringify(merged, null, 2) + '\n', originalHash);
   }
-  atomicWrite(t.manifest, JSON.stringify({ package: pkg.name, version: pkg.version, host: t.host, skillDir: t.skillDir, runtimeDir: t.runtimeDir, config: t.config, hooks: wanted, backup: configBackup }, null, 2) + '\n');
+  const priorRuntimeDirs = existingManifest?.runtimeDirs || (existingManifest?.runtimeDir ? [existingManifest.runtimeDir] : []);
+  const runtimeDirs = [...new Set([...priorRuntimeDirs, t.runtimeDir])];
+  atomicWrite(t.manifest, JSON.stringify({ package: pkg.name, version: pkg.version, host: t.host, skillDir: t.skillDir, skillBackup, runtimeDir: t.runtimeDir, runtimeDirs, config: t.config, hooks: wanted, backup: configBackup }, null, 2) + '\n');
   console.log(`Installed ${t.host} skill${o.hooks ? ' and opt-in hooks' : ''}.`);
+}
+
+function manifestRuntimeDirs(manifest) {
+  return manifest.runtimeDirs || (manifest.runtimeDir ? [manifest.runtimeDir] : []);
+}
+
+function validateManifestPaths(t, manifest) {
+  const runtimeRoot = path.resolve(path.join(t.data, 'runtime'));
+  if (fs.existsSync(t.data) && fs.lstatSync(t.data).isSymbolicLink()) throw new Error(`Refusing symlinked managed data directory: ${t.data}`);
+  if (fs.existsSync(runtimeRoot) && fs.lstatSync(runtimeRoot).isSymbolicLink()) throw new Error(`Refusing symlinked runtime root: ${runtimeRoot}`);
+  for (const candidate of manifestRuntimeDirs(manifest)) {
+    if (typeof candidate !== 'string') throw new Error('Invalid runtime path in installation manifest');
+    const resolved = path.resolve(candidate);
+    if (path.dirname(resolved) !== runtimeRoot || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(path.basename(resolved))) {
+      throw new Error(`Unsafe runtime path in installation manifest: ${candidate}`);
+    }
+    if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) throw new Error(`Refusing symlinked runtime directory: ${resolved}`);
+  }
+  if (manifest.skillBackup) {
+    if (typeof manifest.skillBackup !== 'string') throw new Error('Invalid skill backup path in installation manifest');
+    const backup = path.resolve(manifest.skillBackup);
+    const expectedParent = path.dirname(path.resolve(t.skillDir));
+    const expectedPrefix = `${path.basename(t.skillDir)}.euraika-pa-backup-`;
+    if (path.dirname(backup) !== expectedParent || !path.basename(backup).startsWith(expectedPrefix)) {
+      throw new Error(`Unsafe skill backup path in installation manifest: ${manifest.skillBackup}`);
+    }
+    if (fs.existsSync(backup) && fs.lstatSync(backup).isSymbolicLink()) throw new Error(`Refusing symlinked skill backup: ${backup}`);
+  }
+}
+
+function runtimeReferenced(runtimeDir, installationsDir) {
+  if (!fs.existsSync(installationsDir)) return false;
+  for (const name of fs.readdirSync(installationsDir)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      if (manifestRuntimeDirs(readJson(path.join(installationsDir, name))).includes(runtimeDir)) return true;
+    } catch { return true; }
+  }
+  return false;
+}
+
+function cleanupRuntimeDirs(t, manifest) {
+  const installationsDir = path.dirname(t.manifest);
+  for (const candidate of manifestRuntimeDirs(manifest)) {
+    if (!runtimeReferenced(candidate, installationsDir)) fs.rmSync(candidate, { recursive: true, force: true });
+  }
 }
 
 function uninstall(t, o) {
   if (!fs.existsSync(t.manifest)) return console.log(`No owned ${t.host} installation; skipped.`);
   const manifest = readJson(t.manifest);
+  validateManifestPaths(t, manifest);
   const current = readJson(t.config);
   const originalHash = fs.existsSync(t.config) ? hash(fs.readFileSync(t.config)) : null;
   const { next, conflicts } = remove(current, manifest.hooks);
@@ -180,7 +238,9 @@ function uninstall(t, o) {
   if (!equal(current, next)) { backup(t.config); atomicWrite(t.config, JSON.stringify(next, null, 2) + '\n', originalHash); }
   const marker = path.join(t.skillDir, '.euraika-pa-install.json');
   if (fs.existsSync(marker) && readJson(marker).package === pkg.name) fs.rmSync(t.skillDir, { recursive: true, force: true });
+  if (manifest.skillBackup && !fs.existsSync(t.skillDir) && fs.existsSync(manifest.skillBackup)) fs.renameSync(manifest.skillBackup, t.skillDir);
   fs.rmSync(t.manifest, { force: true });
+  cleanupRuntimeDirs(t, manifest);
   console.log(`Uninstalled owned ${t.host} files.`);
 }
 
@@ -197,7 +257,8 @@ function doctor() {
   console.log(`Platform: ${process.platform}${process.platform === 'win32' ? ' (installer unsupported)' : ''}`);
   const source = path.join(packageRoot, 'runtime', 'personal-assistant-hook.mjs');
   const prompt = path.join(packageRoot, 'runtime', 'prompt.xml');
-  console.log(`Runtime: ${fs.existsSync(source) && fs.existsSync(prompt) ? 'ok' : 'missing files'}`);
+  const intentGate = path.join(packageRoot, 'runtime', 'intent-gate.xml');
+  console.log(`Runtime: ${fs.existsSync(source) && fs.existsSync(prompt) && fs.existsSync(intentGate) ? 'ok' : 'missing files'}`);
   console.log('Memory: optional; use @euraika-labs/personal-assistant-memory-routing for multi-provider recall');
 }
 
